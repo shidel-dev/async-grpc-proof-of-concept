@@ -10,61 +10,63 @@ require "protocol/http2/stream"
 require "hello_pb"
 
 class Session
-	attr_reader :server, :streams
-	def initialize( peer )
-		@server = Protocol::HTTP2::Server.new(Protocol::HTTP2::Framer.new(peer))
-		@streams = {}
-		read_preface
-		process_events
-	end
+  attr_reader :server, :streams
 
-	private
-	def read_preface
-		settings_frame = server.read_connection_preface([[Protocol::HTTP2::Settings::HEADER_TABLE_SIZE, 2048]])
-		server.remote_settings.maximum_concurrent_streams = server.local_settings.maximum_concurrent_streams
-		settings_frame
-	end
+  def initialize(peer)
+    @server = Protocol::HTTP2::Server.new(Protocol::HTTP2::Framer.new(peer))
+    @streams = {}
+    read_preface
+    process_events
+  end
 
-	def process_events
-		while !server.closed?
-			frame = server.read_frame
-			next unless server.streams[frame.stream_id]
-			if !streams[frame.stream_id] && frame.type != Protocol::HTTP2::HeadersFrame::TYPE
-				raise
-			elsif !streams[frame.stream_id]
-				_, header_str = frame.unpack
-				headers = server.decode_headers( header_str )
-				streams[frame.stream_id] ||= {
-					headers: headers	
-				}
-			elsif frame.type == Protocol::HTTP2::DataFrame::TYPE
-				_, len, buf = frame.unpack.unpack('CNa*')
-				req = Helloworld::HelloRequest.decode( buf )
-				response = Helloworld::HelloReply.new( message: "hello #{req.name}" )
-				response_proto = response.to_proto
-				buf = [0, response_proto.length, response_proto].pack("CNa*")
-				stream = server.streams[frame.stream_id]
-				stream.send_headers(nil, [
-						[":status"              , '200'],
-            ["content-type"         , "application/grpc"],
-            ["grpc-accept-encoding" , "identity,deflate,gzip"],
-            ["accept-encoding"      , "identity,gzip"],
-				])
-				data_frame = Protocol::HTTP2::DataFrame.new(frame.stream_id)
-				data_frame.pack( buf )
-				server.write_frame( data_frame )
-				stream.send_headers( nil, [
-					["grpc-status", "0"],
-					["grpc-message", "OK"],
-				], Protocol::HTTP2::END_STREAM)
-			end
-		end
-	end
+  private
+
+  def read_preface
+    settings_frame = server.read_connection_preface([[Protocol::HTTP2::Settings::HEADER_TABLE_SIZE, 2048]])
+    server.remote_settings.maximum_concurrent_streams = server.local_settings.maximum_concurrent_streams
+    settings_frame
+  end
+
+  def process_events
+    while !server.closed?
+      frame = server.read_frame
+      next unless server.streams[frame.stream_id]
+      if !streams[frame.stream_id] && frame.type != Protocol::HTTP2::HeadersFrame::TYPE
+        raise
+      elsif !streams[frame.stream_id]
+        _, header_str = frame.unpack
+        headers = server.decode_headers(header_str)
+        streams[frame.stream_id] ||= {
+          headers: headers,
+        }
+      elsif frame.type == Protocol::HTTP2::DataFrame::TYPE
+        _, len, buf = frame.unpack.unpack("CNa*")
+        req = Helloworld::HelloRequest.decode(buf)
+        response = Helloworld::HelloReply.new(message: "hello #{req.name}")
+        response_proto = response.to_proto
+        buf = [0, response_proto.length, response_proto].pack("CNa*")
+        stream = server.streams[frame.stream_id]
+        stream.send_headers(nil, [
+          [":status", "200"],
+          ["content-type", "application/grpc"],
+          ["grpc-accept-encoding", "identity,deflate,gzip"],
+          ["accept-encoding", "identity,gzip"],
+        ])
+        data_frame = Protocol::HTTP2::DataFrame.new(frame.stream_id)
+        data_frame.pack(buf)
+        server.write_frame(data_frame)
+        stream.send_headers(nil, [
+          ["grpc-status", "0"],
+          ["grpc-message", "OK"],
+        ], Protocol::HTTP2::END_STREAM)
+      end
+    end
+  end
 end
 
 Async do
-	endpoint = Async::IO::Endpoint.tcp('0.0.0.0', 9000)
-	endpoint.accept do |peer|
-		Session.new( peer )
-	end
+  endpoint = Async::IO::Endpoint.tcp("0.0.0.0", 9000)
+  endpoint.accept do |peer|
+    Session.new(peer)
+  end
 end
